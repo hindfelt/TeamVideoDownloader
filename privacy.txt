@@ -13,10 +13,10 @@ The Extension's only function is to let a signed-in user download a Microsoft Te
 - The Extension does not store user data.
 - The Extension does not send any data to external servers, third parties, or cloud storage operated by the developer.
 - All processing (download, decryption, and muxing) is performed locally in the user's browser.
-- The only network requests made are to Microsoft's SharePoint/Stream endpoints (*.sharepoint.com, *.svc.ms) to retrieve the recording the user is already signed in to access.
+- The only network requests made are to Microsoft's SharePoint/Stream endpoints (*.sharepoint.com, *.svc.ms), or their Defender proxy endpoints (*.sharepoint.com.mcas.ms, *.svc.ms.mcas.ms) when access is granted, to retrieve the recording the user is already signed in to access.
 
 4. Permissions
-The Extension requests host access only to Microsoft's Teams and SharePoint/Stream domains (*.sharepoint.com, *.svc.ms, teams.microsoft.com, teams.cloud.microsoft) so it can run on recording pages and fetch the media segments and decryption key needed to save the recording. It requests no other API permissions.
+The Extension requests host access to Microsoft's Teams and SharePoint/Stream domains (*.sharepoint.com, *.svc.ms, teams.microsoft.com, teams.cloud.microsoft) so it can run on recording pages and fetch the media segments and decryption key needed to save the recording. It uses activeTab to read the current tab's URL when the toolbar icon is clicked and scripting to register the bundled scripts for Defender proxy pages. Host access to *.sharepoint.com.mcas.ms and *.svc.ms.mcas.ms is optional and requested only when the toolbar icon is clicked on a proxied SharePoint page.
 
 5. Security
 Because the Extension does not collect or transmit data to the developer or to third parties, there is no developer-side storage that could be breached. Recordings are handled only on the user's own device.

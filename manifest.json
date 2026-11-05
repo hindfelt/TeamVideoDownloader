@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Teams Recording Downloader",
-  "version": "2.1",
+  "version": "2.2",
   "description": "Download Microsoft Teams / SharePoint Stream meeting recordings (in-browser, decrypts AES-128 segments).",
   "host_permissions": [
     "https://*.sharepoint.com/*",
@@ -9,6 +9,14 @@
     "https://teams.microsoft.com/*",
     "https://teams.cloud.microsoft/*"
   ],
+  "optional_host_permissions": [
+    "https://*.sharepoint.com.mcas.ms/*",
+    "https://*.svc.ms.mcas.ms/*"
+  ],
+  "permissions": ["activeTab", "scripting"],
+  "background": {
+    "service_worker": "proxy.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -45,6 +53,7 @@
       "resources": ["mux-worker.js"],
       "matches": [
         "https://*.sharepoint.com/*",
+        "https://*.sharepoint.com.mcas.ms/*",
         "https://teams.microsoft.com/*",
         "https://teams.cloud.microsoft/*"
       ]

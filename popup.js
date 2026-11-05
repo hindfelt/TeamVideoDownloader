@@ -20,16 +20,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const headers = capture.headers || null;
             const meetingName = sanitizeFileName(pageInfo.title || tab.title || 'teams_recording');
 
-            console.log('Resolved manifest:', manifestUrl, 'name:', meetingName, 'headers:', headers);
-
             if (!manifestUrl) {
                 status.textContent = 'No manifest URL found. Play the recording for a few seconds, then click again.';
                 return;
             }
 
             const command = buildFfmpegCommand(removeEnableCdn(manifestUrl), headers, meetingName);
-            console.log('Generated ffmpeg command:', command);
-
             await navigator.clipboard.writeText(command);
             status.textContent = hasTransportAuth(headers)
                 ? 'ffmpeg command with auth copied.'
@@ -57,8 +53,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             const command = buildYtDlpCommand(pageUrl);
-            console.log('Generated yt-dlp command:', command);
-
             await navigator.clipboard.writeText(command);
             status.textContent = pageInfo.streamUrl || capture.manifestUrl
                 ? 'yt-dlp command copied.'

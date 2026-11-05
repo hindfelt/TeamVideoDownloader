@@ -5,6 +5,26 @@ Stream meeting recordings **entirely in the browser** — including the AES-128
 encryption Microsoft now applies to the media segments. No command line, no
 ffmpeg, no manual steps.
 
+## What's new in 2.2
+
+- **Microsoft Defender for Cloud Apps proxy support.** Organizations that route
+  SharePoint through the Defender session proxy (`*.sharepoint.com.mcas.ms`) can
+  now download recordings. Access is opt-in: click the toolbar icon on a proxied
+  recording page, allow access, and the page reloads with the download button
+  enabled. Users without the proxy see no new permission prompt.
+- **Longer recordings.** The per-download limit is raised from 512 MiB to
+  3.5 GiB, just under the 4 GiB ceiling of the MP4 format the muxer writes.
+- **Trailing segment tolerance.** SharePoint's transcoder sometimes refuses the
+  final, partial segment of a track (HTTP 404/409/416). That segment, usually
+  under a second of media, is now skipped instead of failing the whole download.
+- **Hardening.** Media requests are limited to HTTPS on Microsoft and Defender
+  proxy hosts, the `x-spopactoken` is sent only to the manifest's own origin,
+  redirects are rejected, and manifest/MP4 parsing is bounded.
+
+Check with your IT or security team before using the extension behind the
+Defender proxy. The proxy enforces your organization's download policies, and
+assembling the recording in the browser may not be covered by them.
+
 ## What's new in 2.1
 
 **Recordings now download entirely in the browser — no ffmpeg or terminal needed.**
@@ -24,8 +44,8 @@ Version 2.1 handles the whole pipeline itself:
 - Remuxes them into a single seekable MP4, saved straight to your Downloads.
 - A **⬇ Download recording** button now appears automatically on Stream pages —
   no need to open the toolbar popup.
-- Security hardening: origin-scoped `postMessage` handoff between the page and
-  the content script.
+- Security hardening: validated HTTPS media destinations, origin-bound auth
+  tokens, redirect blocking, and bounded manifest/media parsing.
 
 Recordings protected with hard DRM (Widevine/PlayReady/FairPlay) still cannot be
 downloaded client-side.
@@ -68,6 +88,32 @@ in-page overlay path only.
   or FairPlay cannot be decrypted client-side and are detected and skipped.
 - Auth tokens are short-lived. If a download fails with 401/expired, refresh the
   recording page, play it for a few seconds, and try again.
+- The in-memory downloader accepts at most **3.5 GiB of audio/video data** per
+  download, a **4 MiB manifest**, and **100,000 segments**. The muxer accepts at
+  most **2,000,000 samples** and stops after **two minutes**. Larger or malformed
+  inputs fail with an error instead of continuing to allocate memory.
+  Large recordings still need substantial free memory; the size ceiling does
+  not guarantee that every browser can process a recording that large.
+- Media URLs must use HTTPS on the supported SharePoint/Stream or Defender proxy
+  domains. Redirects are rejected, and auth tokens are sent only to the exact
+  origin of the captured manifest. Page-world messages remain observable by
+  scripts in the recording page; origin checks do not authenticate those scripts.
+
+## Security regression checks
+
+Run with Node.js 18 or newer:
+
+```bash
+node --test tests/*.test.cjs
+```
+
+These checks cover destination validation, token scoping, scripted clicks,
+capture changes during a download, streamed response limits, malformed manifests
+and MP4 inputs, worker timeout/abort cleanup, and optional proxy permission
+grant/denial/revocation. Manifest processing uses a
+synthetic DOM; the MP4 tests use real fragmented H.264/AAC fixtures. Before
+publishing, reload the unpacked extension and test an actual recording, including
+the Defender proxy flow if applicable.
 
 ## Installation
 
@@ -92,12 +138,17 @@ Install the published listing, then pin it from the extensions menu.
 2. Click the **⬇ Download recording** button that appears bottom-right.
 3. Watch the progress; the `.mp4` lands in your Downloads when muxing finishes.
 
+For a SharePoint recording behind the Defender proxy (`*.sharepoint.com.mcas.ms`),
+click the extension's toolbar icon and grant the optional host access. The page
+reloads with proxy support enabled.
+
 ## File structure
 
 Published build:
 
 ```
 ├── manifest.json     # MV3 extension config
+├── proxy.js          # service worker: opt-in Defender proxy support
 ├── intercept.js      # page (MAIN) world: hooks fetch, captures manifest + token
 ├── content.js        # isolated world: DASH parse, download, decrypt, orchestrate
 ├── mux-worker.js     # Web Worker: fMP4 → flat MP4 remuxer
@@ -114,10 +165,13 @@ Also in the repo, but not part of the published build:
 
 ## Permissions
 
-The published build requests **no API permissions** — only host access to
-`*.sharepoint.com`, `*.svc.ms`, `teams.microsoft.com`, and
-`teams.cloud.microsoft`, so the content script can run on the recording pages and
-fetch the media segments and decryption key.
+The published build requests host access to `*.sharepoint.com`, `*.svc.ms`,
+`teams.microsoft.com`, and `teams.cloud.microsoft` for the player and media.
+`activeTab` lets the toolbar action read the clicked tab's URL, and `scripting`
+registers the bundled scripts for Defender proxy pages. Access to
+`*.sharepoint.com.mcas.ms` and `*.svc.ms.mcas.ms` is optional and requested when
+the toolbar icon is clicked on a proxy page. Revoking that access removes the
+proxy script registrations.
 
 ## Credits
 

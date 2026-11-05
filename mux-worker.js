@@ -10,6 +10,9 @@
 // The mux logic itself is lifted verbatim from the in-content muxTracks that
 // used to run on the UI thread; only the I/O wrapper at top + bottom is new.
 
+const MAX_INPUT_BYTES = 3584 * 1024 * 1024; // 3.5 GiB: stco/mdat use 32-bit sizes
+const MAX_SAMPLES = 2000000;
+
 self.addEventListener('message', async (event) => {
   const { video, audio } = event.data || {};
   if (!video || !audio) {
@@ -33,8 +36,19 @@ self.addEventListener('message', async (event) => {
   }
 
   try {
+    if (!Array.isArray(video) || !Array.isArray(audio) || video.length + audio.length > 100002) throw new Error('Invalid mux input');
+    let inputBytes = 0;
+    for (const chunk of [...video, ...audio]) {
+      if (!(chunk instanceof ArrayBuffer) && !(chunk instanceof Uint8Array)) throw new Error('Invalid mux chunk');
+      inputBytes += chunk.byteLength;
+      if (inputBytes > MAX_INPUT_BYTES) throw new Error('Recording exceeds the mux size limit');
+    }
     const videoUint8 = concatChunks(video);
     const audioUint8 = concatChunks(audio);
+    // The source buffers were transferred into this worker. Release their
+    // references before allocating the final MP4, especially for large files.
+    video.length = 0;
+    audio.length = 0;
     const result = mux(videoUint8, audioUint8, reportProgress);
     // Transfer the result buffer back rather than structured-cloning it
     self.postMessage({ result }, [result.buffer]);
@@ -49,10 +63,14 @@ self.addEventListener('message', async (event) => {
 // ============================================================================
 
 function mux(videoUint8, audioUint8, onProgress) {
+  if (videoUint8.byteLength + audioUint8.byteLength > MAX_INPUT_BYTES) throw new Error('Recording exceeds the mux size limit');
+  let totalSamples = 0;
   function readU32(b, off) {
+    if (off < 0 || off + 4 > b.length) throw new Error('Truncated MP4 field');
     return ((b[off] << 24) | (b[off+1] << 16) | (b[off+2] << 8) | b[off+3]) >>> 0;
   }
   function writeU32(b, off, val) {
+    if (off < 0 || off + 4 > b.length || !Number.isSafeInteger(val) || val < 0 || val > 0xffffffff) throw new Error('Invalid MP4 field');
     b[off] = (val >>> 24) & 0xFF; b[off+1] = (val >>> 16) & 0xFF;
     b[off+2] = (val >>> 8) & 0xFF; b[off+3] = val & 0xFF;
   }
@@ -65,11 +83,18 @@ function mux(videoUint8, audioUint8, onProgress) {
     return out;
   }
 
+  function boxSize(b, pos, end = b.length) {
+    if (end > b.length || pos < 0 || pos + 8 > end) throw new Error('Truncated MP4 box');
+    const declared = readU32(b, pos);
+    const size = declared === 0 ? end - pos : declared;
+    if (size < 8 || size > end - pos) throw new Error('Invalid or unsupported MP4 box size');
+    return size;
+  }
+
   function findBox(b, type, startOff = 0, maxOff = b.length) {
     let pos = startOff;
     while (pos + 8 <= maxOff) {
-      const size = readU32(b, pos);
-      if (size < 8) break;
+      const size = boxSize(b, pos, maxOff);
       if (btype(b, pos + 4) === type) return { offset: pos, size };
       pos += size;
     }
@@ -100,7 +125,7 @@ function mux(videoUint8, audioUint8, onProgress) {
   let aTrex;
   const aMvexBox = findBox(aMoov, 'mvex', 8);
   if (aMvexBox) {
-    const aTrexBox = findBox(aMoov, 'trex', aMvexBox.offset + 8);
+    const aTrexBox = findBox(aMoov, 'trex', aMvexBox.offset + 8, aMvexBox.offset + aMvexBox.size);
     if (aTrexBox) {
       aTrex = new Uint8Array(aMoov.slice(aTrexBox.offset, aTrexBox.offset + aTrexBox.size));
       writeU32(aTrex, 12, 2);
@@ -167,14 +192,12 @@ function mux(videoUint8, audioUint8, onProgress) {
     const frags = [];
     let pos = 0;
     while (pos + 8 <= bytes.length) {
-      const size = readU32(bytes, pos);
-      if (size < 8) break;
+      const size = boxSize(bytes, pos);
       if (btype(bytes, pos + 4) === 'moof') {
         let trafData = null;
         let mp = pos + 8;
         while (mp + 8 <= pos + size) {
-          const csz = readU32(bytes, mp);
-          if (csz < 8) break;
+          const csz = boxSize(bytes, mp, pos + size);
           if (btype(bytes, mp + 4) === 'traf') {
             trafData = bytes.slice(mp, mp + csz);
             break;
@@ -184,8 +207,8 @@ function mux(videoUint8, audioUint8, onProgress) {
         const nextPos = pos + size;
         let mdatPayload = null;
         if (nextPos + 8 <= bytes.length && btype(bytes, nextPos + 4) === 'mdat') {
-          const mdatSize = readU32(bytes, nextPos);
-          mdatPayload = bytes.slice(nextPos + 8, nextPos + mdatSize);
+          const mdatSize = boxSize(bytes, nextPos);
+          mdatPayload = bytes.subarray(nextPos + 8, nextPos + mdatSize);
         }
         if (trafData && mdatPayload) frags.push({ traf: trafData, mdatPayload });
       }
@@ -199,11 +222,14 @@ function mux(videoUint8, audioUint8, onProgress) {
     const samples = [];
     let pos = 8;
     while (pos + 8 <= trafBytes.length) {
-      const sz = readU32(trafBytes, pos);
-      if (sz < 8) break;
+      const sz = boxSize(trafBytes, pos);
+      const end = pos + sz;
       const t = btype(trafBytes, pos + 4);
       if (t === 'tfhd') {
+        if (sz < 16) throw new Error('Truncated tfhd box');
         const fl = ((trafBytes[pos+9]<<16)|(trafBytes[pos+10]<<8)|trafBytes[pos+11])>>>0;
+        const required = 16 + ((fl & 1) ? 8 : 0) + ((fl & 2) ? 4 : 0) + ((fl & 8) ? 4 : 0) + ((fl & 0x10) ? 4 : 0) + ((fl & 0x20) ? 4 : 0);
+        if (required > sz) throw new Error('Truncated tfhd fields');
         let o = pos + 16;
         if (fl & 1) o += 8;
         if (fl & 2) o += 4;
@@ -212,12 +238,17 @@ function mux(videoUint8, audioUint8, onProgress) {
         if (fl & 0x20) { defFlags = readU32(trafBytes, o); o += 4; }
       }
       if (t === 'trun') {
+        if (sz < 16) throw new Error('Truncated trun box');
         const fl = ((trafBytes[pos+9]<<16)|(trafBytes[pos+10]<<8)|trafBytes[pos+11])>>>0;
         const cnt = readU32(trafBytes, pos + 12);
+        if (cnt > MAX_SAMPLES - totalSamples) throw new Error('Too many MP4 samples');
         let o = pos + 16;
         if (fl & 1) o += 4;
         let firstFlags = defFlags;
-        if (fl & 4) { firstFlags = readU32(trafBytes, o); o += 4; }
+        if (fl & 4) { if (o + 4 > end) throw new Error('Truncated trun fields'); firstFlags = readU32(trafBytes, o); o += 4; }
+        const stride = ((fl & 0x100) ? 4 : 0) + ((fl & 0x200) ? 4 : 0) + ((fl & 0x400) ? 4 : 0) + ((fl & 0x800) ? 4 : 0);
+        if (o > end || cnt * stride > end - o) throw new Error('Truncated MP4 sample table');
+        totalSamples += cnt;
         for (let i = 0; i < cnt; i++) {
           let dur = defDur, size = defSize, flags = (i === 0) ? firstFlags : defFlags, cts = 0;
           if (fl & 0x100) { dur = readU32(trafBytes, o); o += 4; }
@@ -229,17 +260,23 @@ function mux(videoUint8, audioUint8, onProgress) {
       }
       pos += sz;
     }
+    if (pos !== trafBytes.length) throw new Error('Truncated traf box');
     return samples;
   }
 
   const vFrags = collectFragments(videoUint8);
   const aFrags = collectFragments(audioUint8);
 
-  const vSamples = vFrags.flatMap(f => parseTrafSamples(f.traf));
-  const aSamples = aFrags.flatMap(f => parseTrafSamples(f.traf));
+  function fragmentSamples(f) {
+    const samples = parseTrafSamples(f.traf);
+    if (samples.reduce((sum, s) => sum + s.size, 0) > f.mdatPayload.length) throw new Error('MP4 samples exceed media data');
+    return samples;
+  }
+  const vSamples = vFrags.flatMap(fragmentSamples);
+  const aSamples = aFrags.flatMap(fragmentSamples);
 
-  const vData = cat(...vFrags.map(f => f.mdatPayload));
-  const aData = cat(...aFrags.map(f => f.mdatPayload));
+  const vDataSize = vFrags.reduce((size, f) => size + f.mdatPayload.length, 0);
+  const aDataSize = aFrags.reduce((size, f) => size + f.mdatPayload.length, 0);
 
   onProgress(0, 1, 'Building MP4...');
 
@@ -349,8 +386,7 @@ function mux(videoUint8, audioUint8, onProgress) {
   const traks = [];
   let tp = 8;
   while (tp + 8 <= combinedMoov.length) {
-    const sz = readU32(combinedMoov, tp);
-    if (sz < 8) break;
+    const sz = boxSize(combinedMoov, tp);
     if (btype(combinedMoov, tp + 4) === 'trak') {
       traks.push(combinedMoov.slice(tp, tp + sz));
     }
@@ -460,35 +496,28 @@ function mux(videoUint8, audioUint8, onProgress) {
   const vFtypBox = findBox(videoUint8, 'ftyp');
   const ftyp = vFtypBox ? videoUint8.slice(vFtypBox.offset, vFtypBox.offset + vFtypBox.size) : new Uint8Array(0);
 
-  const mdatPayload = cat(vData, aData);
-  const mdatBox = new Uint8Array(8 + mdatPayload.length);
-  writeU32(mdatBox, 0, mdatBox.length);
-  mdatBox[4]=0x6D; mdatBox[5]=0x64; mdatBox[6]=0x61; mdatBox[7]=0x74;
-  mdatBox.set(mdatPayload, 8);
+  const mdatSize = 8 + vDataSize + aDataSize;
+  const outputSize = ftyp.length + newMoov.length + mdatSize;
+  if (outputSize > 0xffffffff) throw new Error('MP4 exceeds the 32-bit size limit');
 
   const videoDataOffset = ftyp.length + newMoov.length + 8;
-  const audioDataOffset = videoDataOffset + vData.length;
+  const audioDataOffset = videoDataOffset + vDataSize;
 
   function patchStcoInMoov(moov, trakIndex, offset) {
     let trakCount = 0;
     let p = 8;
     while (p + 8 <= moov.length) {
-      const sz = readU32(moov, p);
-      if (sz < 8) break;
+      const sz = boxSize(moov, p);
       if (btype(moov, p + 4) === 'trak') {
         if (trakCount === trakIndex) {
-          const stcoBox = (function findDeep(buf, type, start, end) {
-            let pos = start;
-            while (pos + 8 <= end) {
-              const s = readU32(buf, pos);
-              if (s < 8) break;
-              if (btype(buf, pos + 4) === type) return pos;
-              const inner = findDeep(buf, type, pos + 8, pos + s);
-              if (inner !== -1) return inner;
-              pos += s;
-            }
-            return -1;
-          })(moov, 'stco', p + 8, p + sz);
+          // Follow only the known container path; sample-entry bytes are not
+          // arbitrary nested boxes and must never drive recursive traversal.
+          let parent = { offset: p, size: sz };
+          for (const type of ['mdia', 'minf', 'stbl', 'stco']) {
+            parent = findBox(moov, type, parent.offset + 8, parent.offset + parent.size);
+            if (!parent) break;
+          }
+          const stcoBox = parent ? parent.offset : -1;
           if (stcoBox !== -1) {
             writeU32(moov, stcoBox + 16, offset);
           }
@@ -503,5 +532,20 @@ function mux(videoUint8, audioUint8, onProgress) {
   patchStcoInMoov(newMoov, 0, videoDataOffset);
   patchStcoInMoov(newMoov, 1, audioDataOffset);
 
-  return cat(ftyp, newMoov, mdatBox);
+  // Copy media views straight into the output rather than creating separate
+  // video, audio, combined payload, and mdat copies of the entire recording.
+  const output = new Uint8Array(outputSize);
+  output.set(ftyp, 0);
+  output.set(newMoov, ftyp.length);
+  const mdatOffset = ftyp.length + newMoov.length;
+  writeU32(output, mdatOffset, mdatSize);
+  output.set([0x6D, 0x64, 0x61, 0x74], mdatOffset + 4);
+  let dataOffset = mdatOffset + 8;
+  for (const fragments of [vFrags, aFrags]) {
+    for (const fragment of fragments) {
+      output.set(fragment.mdatPayload, dataOffset);
+      dataOffset += fragment.mdatPayload.length;
+    }
+  }
+  return output;
 }

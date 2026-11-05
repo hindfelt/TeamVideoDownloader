@@ -50,8 +50,8 @@
       const spopactoken = extractHeader(args, 'x-spopactoken');
       console.log('[Teams DL] Detected videomanifest URL',
         spopactoken ? '(with x-spopactoken)' : '(no token)');
-      // Same-frame handoff to the isolated-world content script — scope the
-      // message to this frame's origin so it can't leak to other listeners.
+      // Same-frame handoff. This scopes delivery to the frame's origin; other
+      // scripts in that frame can still observe or forge these messages.
       window.postMessage({ type: 'VIDEO_MANIFEST_URL', manifestUrl, spopactoken }, window.location.origin);
     }
 
