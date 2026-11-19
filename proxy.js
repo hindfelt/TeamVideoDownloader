@@ -51,10 +51,68 @@ async function syncScripts() {
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => { syncScripts().catch(console.error); });
-chrome.runtime.onStartup.addListener(() => { syncScripts().catch(console.error); });
-chrome.permissions.onAdded.addListener(() => { syncScripts().catch(console.error); });
-chrome.permissions.onRemoved.addListener(() => { syncScripts().catch(console.error); });
+// Until proxy access is granted the extension cannot run on proxy pages, so
+// it cannot show anything there itself. declarativeContent can still swap the
+// toolbar icon on matching URLs without host access: show a dotted icon on
+// proxied SharePoint pages as a hint to click it. Removed once access exists.
+const HINT_RULE_ID = 'proxy-hint';
+let hintImagePromise = null;
+
+function hintImageData() {
+  if (!hintImagePromise) {
+    hintImagePromise = (async () => {
+      const resp = await fetch(chrome.runtime.getURL('icons/team_lit.png'));
+      const bitmap = await createImageBitmap(await resp.blob());
+      const out = {};
+      for (const size of [16, 32]) {
+        const canvas = new OffscreenCanvas(size, size);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0, size, size);
+        const r = size * 0.22;
+        ctx.beginPath();
+        ctx.arc(size - r, r, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#f97316';
+        ctx.fill();
+        ctx.lineWidth = Math.max(1, size / 16);
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+        out[size] = ctx.getImageData(0, 0, size, size);
+      }
+      return out;
+    })();
+    hintImagePromise.catch(() => { hintImagePromise = null; });
+  }
+  return hintImagePromise;
+}
+
+function removeHintRules() {
+  return new Promise((resolve) => chrome.declarativeContent.onPageChanged.removeRules(undefined, () => resolve()));
+}
+
+async function syncHint() {
+  if (!chrome.declarativeContent) return;
+  const granted = await hasProxyAccess();
+  await removeHintRules();
+  if (granted) return;
+  const imageData = await hintImageData();
+  await new Promise((resolve) => chrome.declarativeContent.onPageChanged.addRules([{
+    id: HINT_RULE_ID,
+    conditions: [new chrome.declarativeContent.PageStateMatcher({
+      pageUrl: { schemes: ['https'], hostSuffix: '.sharepoint.com.mcas.ms' }
+    })],
+    actions: [new chrome.declarativeContent.SetIcon({ imageData })]
+  }], () => resolve()));
+}
+
+function syncAll() {
+  syncScripts().catch(console.error);
+  syncHint().catch(console.error);
+}
+
+chrome.runtime.onInstalled.addListener(syncAll);
+chrome.runtime.onStartup.addListener(syncAll);
+chrome.permissions.onAdded.addListener(syncAll);
+chrome.permissions.onRemoved.addListener(syncAll);
 
 chrome.action.onClicked.addListener((tab) => {
   // activeTab exposes tab.url only for the tab the user clicked on.

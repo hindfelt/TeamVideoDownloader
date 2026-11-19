@@ -13,7 +13,7 @@
     "https://*.sharepoint.com.mcas.ms/*",
     "https://*.svc.ms.mcas.ms/*"
   ],
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "declarativeContent"],
   "background": {
     "service_worker": "proxy.js"
   },
@@ -41,6 +41,7 @@
     }
   ],
   "action": {
+    "default_title": "Recording Downloader for Microsoft Teams: on a Defender proxy (.mcas.ms) SharePoint page, click to enable downloads",
     "default_icon": {
       "128": "icons/team_lit.png"
     }

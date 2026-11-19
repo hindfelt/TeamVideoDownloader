@@ -168,7 +168,9 @@ Also in the repo, but not part of the published build:
 The published build requests host access to `*.sharepoint.com`, `*.svc.ms`,
 `teams.microsoft.com`, and `teams.cloud.microsoft` for the player and media.
 `activeTab` lets the toolbar action read the clicked tab's URL, and `scripting`
-registers the bundled scripts for Defender proxy pages. Access to
+registers the bundled scripts for Defender proxy pages. `declarativeContent`
+adds a small orange dot to the toolbar icon on Defender proxy pages until
+access is granted, as a hint to click it. Access to
 `*.sharepoint.com.mcas.ms` and `*.svc.ms.mcas.ms` is optional and requested when
 the toolbar icon is clicked on a proxy page. Revoking that access removes the
 proxy script registrations.
