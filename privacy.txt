@@ -2,7 +2,7 @@ Privacy Policy
 Effective Date: 2026-06-25
 
 1. Introduction
-This privacy policy explains how the "Teams Recording Downloader" Chrome extension (the "Extension") handles data.
+This privacy policy explains how the "Recording Downloader for Microsoft Teams" Chrome extension (the "Extension") handles data.
 
 2. Data Collection and Usage
 The Extension does not collect, store, or transmit any personal data. It does not send any data to the developer, to third parties, or to any external server operated by the developer.

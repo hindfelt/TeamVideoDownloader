@@ -1,4 +1,4 @@
-# Teams Recording Downloader
+# Recording Downloader for Microsoft Teams
 
 A Chrome (Manifest V3) extension that downloads your Microsoft Teams / SharePoint
 Stream meeting recordings **entirely in the browser** — including the AES-128
@@ -152,7 +152,7 @@ Published build:
 ├── intercept.js      # page (MAIN) world: hooks fetch, captures manifest + token
 ├── content.js        # isolated world: DASH parse, download, decrypt, orchestrate
 ├── mux-worker.js     # Web Worker: fMP4 → flat MP4 remuxer
-└── icons/            # team_lit.png / team_unlit.png
+└── icons/            # team_lit.png / team_unlit.png (icon.svg is the source)
 ```
 
 Also in the repo, but not part of the published build:
@@ -181,3 +181,5 @@ To Brendan Gooden for revamo inspiration and if you need more bells and whistles
 
 This tool is for downloading recordings **you are authorized to access**. Make
 sure you have permission before downloading any content.
+
+Disclaimer: This extension is an independent tool and is not affiliated with, endorsed by, or sponsored by Microsoft Corporation.
